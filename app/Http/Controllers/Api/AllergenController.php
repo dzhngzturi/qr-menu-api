@@ -31,8 +31,7 @@ class AllergenController extends Controller
             $q = Allergen::query()
                 ->where('restaurant_id', $rid)
                 ->when($request->boolean('only_active'), fn ($qq) => $qq->where('is_active', true))
-                ->orderBy('position', 'asc')
-                ->orderBy('id', 'asc');
+                ->orderBy('id')->orderBy('code');
 
             $per = (int) $request->input('per_page', 20);
 

@@ -114,4 +114,20 @@ class CategoryController extends Controller
         $category->delete();
         return response()->json(['message' => 'Deleted']);
     }
+
+    public function reorder(Request $request)
+    {
+        $ids = $request->input('ids'); // очаква масив: [3,1,2,...]
+
+        if (!is_array($ids)) {
+            return response()->json(['error' => 'Invalid data'], 422);
+        }
+
+        foreach ($ids as $i => $id) {
+            Category::where('id', $id)->update(['position' => $i + 1]);
+        }
+
+        return response()->json(['message' => 'Order updated']);
+    }
+
 }

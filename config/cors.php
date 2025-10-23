@@ -12,3 +12,4 @@ return [
     'max_age' => 0,
     'supports_credentials' => false, // ако НЕ ползваш cookies; ако ползваш Sanctum -> true
 ];
+

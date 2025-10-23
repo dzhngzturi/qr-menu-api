@@ -14,27 +14,52 @@ use Illuminate\Support\Facades\Cache;
 
 class DishController extends Controller
 {
-    public function index(Request $request)
+    
+     public function index(Request $request)
     {
         $rid = $request->attributes->get('restaurant_id');
-        $query = Dish::with('category')
-        ->where('restaurant_id', $rid)
-        ->orderBy('position', 'asc')
-        ->orderBy('id', 'asc');
-        
+
+        $allowedSort = ['id', 'name', 'price', 'position', 'created_at'];
+
+        $query = Dish::with(['category:id,name'])
+            ->where('restaurant_id', $rid);
+
         if ($request->filled('category_id')) {
-            $query->where('category_id', $request->get('category_id'));
+            $query->where('category_id', $request->integer('category_id'));
         }
 
-        if ($search = $request->get('search')) {
+        if ($search = $request->string('search')->toString()) {
             $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%$search%")
-                    ->orWhere('description', 'like', "%$search%");
+                $q->where('name', 'like', "%{$search}%")
+                ->orWhere('description', 'like', "%{$search}%");
             });
         }
 
-        return DishResource::collection($query->paginate(20));
+        // ✅ по подразбиране – position, после име (видимо пренареждане)
+        if ($sort = $request->get('sort')) {
+            foreach (explode(',', $sort) as $piece) {
+                $dir = 'asc';
+                $col = $piece;
+                if (str_starts_with($piece, '-')) {
+                    $dir = 'desc';
+                    $col = ltrim($piece, '-');
+                }
+                if (in_array($col, $allowedSort, true)) {
+                    $query->orderBy($col, $dir);
+                }
+            }
+        } else {
+            $query->orderBy('position')->orderBy('name');
+        }
+
+        $perPage = (int) $request->get('per_page', 20);
+        if ($perPage === -1) {
+            return DishResource::collection($query->get());
+        }
+
+        return DishResource::collection($query->paginate($perPage));
     }
+
 
     public function store(Request $request)
     {
@@ -122,40 +147,45 @@ class DishController extends Controller
         return response()->json(['message' => 'Deleted']);
     }
 
+  
     public function reorder(Request $request)
-    {
-        $rid = $request->attributes->get('restaurant_id');
-
-        $data = $request->validate([
-            // приемаме масив от ID-та в желания ред
-            'ids' => ['required','array','min:1'],
-            'ids.*' => ['integer','distinct']
-        ]);
-
-        // Вземаме само id-тата, които са от този ресторант
-        $validIds = \App\Models\Dish::where('restaurant_id', $rid)
-            ->whereIn('id', $data['ids'])
-            ->pluck('id')->all();
-
-        // Ако няма валидни – 204
-        if (!count($validIds)) return response()->noContent();
-
-        // мап id => позиция (1..N)
-        $order = [];
-        $pos = 1;
-        foreach ($data['ids'] as $id) {
-            if (in_array($id, $validIds, true)) $order[$id] = $pos++;
-        }
-
-        DB::transaction(function () use ($order) {
-            // по-четимо: update на парче
-            foreach ($order as $id => $position) {
-                \App\Models\Dish::where('id', $id)->update(['position' => $position]);
-            }
-        });
-
-        Cache::flush(); // или Cache::tags(["menu:$rid"])->flush();
-
-        return response()->noContent();
+{
+    $rid = (int) $request->attributes->get('restaurant_id');
+    if (!$rid) {
+        return response()->json(['error' => 'Missing restaurant_id (middleware)'], 422);
     }
+
+    $data = $request->validate([
+        'ids'         => ['required','array','min:1'],
+        'ids.*'       => ['integer','distinct'],
+        'category_id' => ['nullable','integer'],
+    ]);
+
+    $q = Dish::where('restaurant_id', $rid);
+    if (!empty($data['category_id'])) {
+        $q->where('category_id', $data['category_id']);
+    }
+    $validIds = $q->whereIn('id', $data['ids'])->pluck('id')->all();
+
+    if (!$validIds) {
+        return response()->json(['updated' => 0, 'reason' => 'no valid ids for this restaurant/category'], 200);
+    }
+
+    $updated = 0;
+    $pos = 1;
+
+    DB::transaction(function () use ($data, $validIds, &$updated, &$pos) {
+        foreach ($data['ids'] as $id) {
+            if (in_array($id, $validIds, true)) {
+                $affected = Dish::where('id', $id)->update(['position' => $pos++]);
+                $updated += $affected;
+            }
+        }
+    });
+
+    return response()->json(['updated' => $updated], 200);
+}
+
+
+
 }
