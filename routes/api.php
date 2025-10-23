@@ -67,11 +67,14 @@ Route::middleware(['auth:sanctum', 'resolve.restaurant', 'restaurant.admin'])->g
     Route::post   ('dishes',                     [DishController::class, 'store']);
     Route::patch  ('dishes/{dish}',              [DishController::class, 'update']);
     Route::delete ('dishes/{dish}',              [DishController::class, 'destroy']);
+    Route::post   ('/dishes/reorder',            [DishController::class, 'reorder']);
 
     // Алергени (CRUD)
     Route::post   ('allergens',                  [AllergenController::class, 'store']);
     Route::patch  ('allergens/{allergen}',       [AllergenController::class, 'update']);
     Route::delete ('allergens/{allergen}',       [AllergenController::class, 'destroy']);
+    Route::post   ('/allergens/reorder',         [AllergenController::class, 'reorder']);
+
 });
 
 /*

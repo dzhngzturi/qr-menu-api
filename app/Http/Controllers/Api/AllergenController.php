@@ -10,6 +10,8 @@ use App\Http\Resources\AllergenResource;
 use App\Models\Allergen;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
+
 
 class AllergenController extends Controller
 {
@@ -29,7 +31,8 @@ class AllergenController extends Controller
             $q = Allergen::query()
                 ->where('restaurant_id', $rid)
                 ->when($request->boolean('only_active'), fn ($qq) => $qq->where('is_active', true))
-                ->orderBy('code');
+                ->orderBy('position', 'asc')
+                ->orderBy('id', 'asc');
 
             $per = (int) $request->input('per_page', 20);
 
@@ -99,5 +102,37 @@ class AllergenController extends Controller
     {
         $rid = (int) $request->attributes->get('restaurant_id');
         abort_unless($rid === $ownerRid, 404);
+    }
+
+    public function reorder(Request $request)
+    {
+        $rid = $request->attributes->get('restaurant_id');
+
+        $data = $request->validate([
+            'ids' => ['required','array','min:1'],
+            'ids.*' => ['integer','distinct']
+        ]);
+
+        $validIds = \App\Models\Allergen::where('restaurant_id', $rid)
+            ->whereIn('id', $data['ids'])
+            ->pluck('id')->all();
+
+        if (!count($validIds)) return response()->noContent();
+
+        $order = [];
+        $pos = 1;
+        foreach ($data['ids'] as $id) {
+            if (in_array($id, $validIds, true)) $order[$id] = $pos++;
+        }
+
+        DB::transaction(function () use ($order) {
+            foreach ($order as $id => $position) {
+                \App\Models\Allergen::where('id', $id)->update(['position' => $position]);
+            }
+        });
+
+        Cache::flush(); // или Cache::tags(["menu:$rid"])->flush();
+
+        return response()->noContent();
     }
 }

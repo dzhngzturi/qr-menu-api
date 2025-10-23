@@ -9,6 +9,8 @@ use Illuminate\Validation\Rule;
 use Illuminate\Support\Str;
 use App\Models\Dish;
 use App\Http\Resources\DishResource;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 
 class DishController extends Controller
 {
@@ -16,9 +18,10 @@ class DishController extends Controller
     {
         $rid = $request->attributes->get('restaurant_id');
         $query = Dish::with('category')
-            ->where('restaurant_id', $rid)
-            ->orderBy('id', 'desc');
-
+        ->where('restaurant_id', $rid)
+        ->orderBy('position', 'asc')
+        ->orderBy('id', 'asc');
+        
         if ($request->filled('category_id')) {
             $query->where('category_id', $request->get('category_id'));
         }
@@ -117,5 +120,42 @@ class DishController extends Controller
         }
         $dish->delete();
         return response()->json(['message' => 'Deleted']);
+    }
+
+    public function reorder(Request $request)
+    {
+        $rid = $request->attributes->get('restaurant_id');
+
+        $data = $request->validate([
+            // приемаме масив от ID-та в желания ред
+            'ids' => ['required','array','min:1'],
+            'ids.*' => ['integer','distinct']
+        ]);
+
+        // Вземаме само id-тата, които са от този ресторант
+        $validIds = \App\Models\Dish::where('restaurant_id', $rid)
+            ->whereIn('id', $data['ids'])
+            ->pluck('id')->all();
+
+        // Ако няма валидни – 204
+        if (!count($validIds)) return response()->noContent();
+
+        // мап id => позиция (1..N)
+        $order = [];
+        $pos = 1;
+        foreach ($data['ids'] as $id) {
+            if (in_array($id, $validIds, true)) $order[$id] = $pos++;
+        }
+
+        DB::transaction(function () use ($order) {
+            // по-четимо: update на парче
+            foreach ($order as $id => $position) {
+                \App\Models\Dish::where('id', $id)->update(['position' => $position]);
+            }
+        });
+
+        Cache::flush(); // или Cache::tags(["menu:$rid"])->flush();
+
+        return response()->noContent();
     }
 }
