@@ -8,11 +8,23 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Validation\Rule;
-use Illuminate\Support\Facades\RateLimiter;   
-use Illuminate\Support\Str;                   
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Str;
 
 class AuthController extends Controller
 {
+    // помощна – връща масив с данни за ресторант или null
+    private function restaurantPayload(?\App\Models\Restaurant $r): ?array
+    {
+        if (!$r) return null;
+        return [
+            'id'   => $r->id,
+            'slug' => $r->slug,
+            'name' => $r->name,
+        ];
+    }
+
+
     public function login(Request $request)
     {
         $data = $request->validate([
@@ -21,67 +33,83 @@ class AuthController extends Controller
         ]);
 
         $email = Str::lower($data['email']);
-        $key   = $email.'|'.$request->ip();
+        $ip    = $request->ip();
 
-        // 1) АКТИВЕН COOLDOWN? → върни 429 (важно: без значение, че опитите са < 20)
-        $attempts = RateLimiter::attempts($key);
-        $cooldown = RateLimiter::availableIn($key); // секунди до отпадане
-        if ($cooldown > 0 && $attempts >= 5) {
+        // Ключове
+        $base   = "login:{$email}|{$ip}";
+        $countK = "{$base}:count"; // брояч (24ч)
+        $lockK  = "{$base}:lock";  // заключване
+
+        // 1) Активен lock?
+        $lockSec = RateLimiter::availableIn($lockK);
+        if ($lockSec > 0) {
             return response()->json([
-                'message' => 'Акаунтът е временно заключен. Опитай отново след '.ceil($cooldown/60).' мин.'
+                'message' => 'Акаунтът е временно заключен. Опитай отново след '.ceil($lockSec/60).' мин.'
             ], 429);
         }
 
         // 2) Проверка на креденшъли
-        $user = \App\Models\User::where('email', $email)->first();
-        if (!$user || !\Illuminate\Support\Facades\Hash::check($data['password'], $user->password)) {
-            $attempts++; // смятаме следващия опит
+        $user = User::where('email', $email)->first();
 
-            // 3) Прагова логика: 5→15мин, 15→30мин, 20→24ч
-            if ($attempts >= 20) {
-                RateLimiter::hit($key, 24 * 60 * 60);     // 24 часа
-            } elseif ($attempts >= 15) {
-                RateLimiter::hit($key, 30 * 60);          // 30 мин
-            } elseif ($attempts >= 5) {
-                RateLimiter::hit($key, 15 * 60);          // 15 мин
-            } else {
-                RateLimiter::hit($key, 24 * 60 * 60);     // пазим история до 24ч
+        if (!$user || !Hash::check($data['password'], $user->password)) {
+            // Брояч за последните 24 часа
+            $current = RateLimiter::attempts($countK) + 1;
+            RateLimiter::hit($countK, 24 * 60 * 60); // пази броя опити 24 часа
+
+            // 3) Прагова логика → слагаме LOCK с точен TTL
+            if ($current >= 20) {
+                RateLimiter::hit($lockK, 24 * 60 * 60);        // 24 часа
+            } elseif ($current >= 15) {
+                RateLimiter::hit($lockK, 30 * 60);             // 30 мин
+            } elseif ($current >= 5) {
+                RateLimiter::hit($lockK, 15 * 60);             // 15 мин
             }
+            // Няма нужда от хитове с 60 сек – заключването е отделно
 
-            // 4) Съвместимо с фронтенда: 422 с поле "email"
             throw ValidationException::withMessages([
                 'email' => ['Невалидни данни за вход.'],
             ]);
         }
 
-        // 5) Успех → чистим брояча и връщаме токен
-        RateLimiter::clear($key);
+        // 4) УСПЕХ → изчисти брояча и заключването
+        RateLimiter::clear($countK);
+        RateLimiter::clear($lockK);
 
         $token = $user->createToken('admin-panel')->plainTextToken;
 
+        // (ако вече връщаш restaurant – остави както е при теб)
         return response()->json([
             'token'    => $token,
             'is_admin' => (bool) $user->is_admin,
             'user'     => ['id'=>$user->id, 'name'=>$user->name, 'email'=>$user->email],
+            // 'restaurant' => $this->restaurantPayload($user->is_admin ? null : $user->primaryRestaurant()),
         ]);
     }
 
+
+    
     public function logout(Request $request)
     {
         $request->user()->currentAccessToken()?->delete();
         return response()->json(['ok' => true]);
     }
 
+
+
     public function me(Request $request)
     {
         $u = $request->user();
+        $restaurant = $u->is_admin ? null : $u->primaryRestaurant();
 
         return response()->json([
-            'user'     => ['id'=>$u->id, 'name'=>$u->name, 'email'=>$u->email],
-            'is_admin' => (bool)$u->is_admin,
+            'user'       => ['id'=>$u->id, 'name'=>$u->name, 'email'=>$u->email],
+            'is_admin'   => (bool)$u->is_admin,
+            'restaurant' => $this->restaurantPayload($restaurant),
         ]);
     }
 
+    
+    
     public function update(Request $r)
     {
         $user = $r->user();
@@ -93,7 +121,7 @@ class AuthController extends Controller
         ]);
 
         if (array_key_exists('password', $data) && $data['password']) {
-            $data['password'] = Hash::make($data['password']);
+            $data['password'] = \Illuminate\Support\Facades\Hash::make($data['password']);
         } else {
             unset($data['password']);
         }

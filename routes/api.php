@@ -6,7 +6,8 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\MenuController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\DishController;
-use App\Http\Controllers\Api\AllergenController; // ⬅️ ВАЖНО: добавен импорт
+use App\Http\Controllers\Api\AllergenController; 
+use App\Http\Middleware\BlockLockedLogin;
 
 // Платформа (супер-админ)
 use App\Http\Controllers\Api\Platform\RestaurantController as PlatformRestaurantController;
@@ -42,7 +43,8 @@ Route::middleware(['resolve.restaurant', 'throttle:60,1'])->group(function () {
 | Auth
 |--------------------------------------------------------------------------
 */
-Route::post('auth/login',  [AuthController::class, 'login']);
+
+Route::post('/auth/login', [AuthController::class, 'login'])->middleware(BlockLockedLogin::class);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('auth/logout', [AuthController::class, 'logout']);

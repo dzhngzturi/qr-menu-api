@@ -6,6 +6,7 @@ use Illuminate\Foundation\Configuration\Middleware;
 use App\Http\Middleware\RestaurantAdminMiddleware;
 use App\Http\Middleware\SuperAdminMiddleware;
 use App\Http\Middleware\ResolveRestaurant;
+use App\Http\Middleware\BlockLockedLogin;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -19,7 +20,10 @@ return Application::configure(basePath: dirname(__DIR__))
             'restaurant.admin' => RestaurantAdminMiddleware::class,
             'resolve.restaurant' => ResolveRestaurant::class,
             'superadmin' => SuperAdminMiddleware::class,
-            
+        ]);
+
+        $middleware->appendToGroup('api', [
+            BlockLockedLogin::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
