@@ -7,6 +7,7 @@ use App\Http\Middleware\RestaurantAdminMiddleware;
 use App\Http\Middleware\SuperAdminMiddleware;
 use App\Http\Middleware\ResolveRestaurant;
 use App\Http\Middleware\BlockLockedLogin;
+use App\Http\Middleware\PublicCache;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -20,6 +21,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'restaurant.admin' => RestaurantAdminMiddleware::class,
             'resolve.restaurant' => ResolveRestaurant::class,
             'superadmin' => SuperAdminMiddleware::class,
+            'public.cache' => PublicCache::class,
         ]);
 
         $middleware->appendToGroup('api', [

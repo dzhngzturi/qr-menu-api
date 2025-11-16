@@ -23,14 +23,15 @@ class MenuController extends Controller
         $rid = $request->attributes->get('restaurant_id');
         $key = 'menu:' . $rid . ':' . sha1($request->fullUrl());
 
-        return Cache::remember($key, 60, function () use ($rid) {
+        // 60 минути кеш
+        return Cache::remember($key, now()->addMinutes(60), function () use ($rid) {
             // само активни категории за публичния изглед
             $categories = Category::query()
                 ->where('restaurant_id', $rid)
                 ->where('is_active', true)
                 ->orderBy('position')
                 ->orderBy('name')
-                ->get(['id','name','slug','position','image_path','is_active'])
+                ->get(['id','name','slug','position','image_path','is_active','updated_at'])
                 ->map(function (Category $c) {
                     return [
                         'id'         => $c->id,
@@ -38,7 +39,9 @@ class MenuController extends Controller
                         'slug'       => $c->slug,
                         'position'   => $c->position,
                         'is_active'  => (bool) $c->is_active,
-                        'image_url'  => $c->image_path ? asset($c->image_path) : null,
+                        'image_url'  => $c->image_path
+                            ? asset($c->image_path) . '?v=' . ($c->updated_at?->timestamp ?? time())
+                            : null,
                     ];
                 });
 
@@ -47,7 +50,7 @@ class MenuController extends Controller
                 ->where('is_active', true)
                 ->with('category:id,name')
                 ->orderBy('name')
-                ->get(['id','category_id','name','description','price','image_path','is_active'])
+                ->get(['id','category_id','name','description','price','image_path','is_active','updated_at'])
                 ->map(fn (Dish $d) => (new DishResource($d->loadMissing('category:id,name')))->toArray(request()));
 
             return compact('categories', 'dishes');
@@ -82,7 +85,7 @@ class MenuController extends Controller
             $q->orderBy('position')->orderBy('name');
         }
 
-        return $q->get(['id','name','slug','position','image_path','is_active'])
+        return $q->get(['id','name','slug','position','image_path','is_active','updated_at'])
             ->map(function (Category $c) {
                 return [
                     'id'         => $c->id,
@@ -90,7 +93,9 @@ class MenuController extends Controller
                     'slug'       => $c->slug,
                     'position'   => $c->position,
                     'is_active'  => (bool) $c->is_active,
-                    'image_url'  => $c->image_path ? asset($c->image_path) : null,
+                    'image_url'  => $c->image_path
+                        ? asset($c->image_path) . '?v=' . ($c->updated_at?->timestamp ?? time())
+                        : null,
                 ];
             });
     }
@@ -122,20 +127,20 @@ class MenuController extends Controller
             });
         }
 
-        // сортиране: ?sort=name,-price
+        // сортиране: ?sort=name,-price (по подразбиране позиция -> име)
         if ($request->filled('sort')) {
             foreach (explode(',', $request->string('sort')) as $field) {
                 $dir = str_starts_with($field, '-') ? 'desc' : 'asc';
                 $col = ltrim($field, '-');
-                if (in_array($col, ['name','price','created_at'])) {
+                if (in_array($col, ['position','name','price','created_at'])) {
                     $q->orderBy($col, $dir);
                 }
             }
         } else {
-            $q->orderBy('name');
+            $q->orderBy('position')->orderBy('name');
         }
 
-        $cols = ['id','category_id','name','description','price','image_path','is_active'];
+        $cols = ['id','category_id','name','description','price','image_path','is_active','updated_at'];
 
         // per_page=-1 => без странициране
         $perPage = (int) $request->input('per_page', 15);

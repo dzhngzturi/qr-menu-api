@@ -17,7 +17,9 @@ class DishResource extends JsonResource
             'price'       => $this->price,
             'is_active'   => (bool) $this->is_active,
 
-            'image_url' => $this->image_path ? url(Storage::url($this->image_path)) : null,
+            'image_url' => $this->image_path
+            ? url(Storage::url($this->image_path)) . '?v=' . ($this->updated_at?->timestamp ?? time())
+            : null,
 
             // когато в контролера си направил ->with('category:id,name')
             'category'    => $this->whenLoaded('category', function () {

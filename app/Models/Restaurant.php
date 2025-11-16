@@ -8,8 +8,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Restaurant extends Model
 {
-    protected $fillable = ['name', 'slug', 'settings'];
-    protected $casts    = ['settings' => 'array'];
+    protected $fillable = ['name', 'slug', 'settings','telemetry_enabled',];
+    protected $casts    = ['settings' => 'array', 'telemetry_enabled' => 'boolean'];
 
     /** Users (many-to-many via restaurant_user) */
     public function users(): BelongsToMany
