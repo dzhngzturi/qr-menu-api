@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\DishController;
 use App\Http\Controllers\Api\AllergenController; 
 use App\Http\Middleware\BlockLockedLogin;
+use App\Http\Controllers\Api\TelemetryController;   
 
 // Платформа (супер-админ)
 use App\Http\Controllers\Api\Platform\RestaurantController as PlatformRestaurantController;
@@ -18,7 +19,7 @@ use App\Http\Controllers\Api\Platform\RestaurantUserController as PlatformRestau
 | Public (no auth) — изискват ?restaurant=slug
 |--------------------------------------------------------------------------
 */
-Route::middleware(['resolve.restaurant', 'throttle:60,1'])->group(function () {
+Route::middleware(['resolve.restaurant', 'throttle:60,1', 'public.cache'])->group(function () {
     // Комбинирано меню (категории + ястия)
     Route::get('menu', [MenuController::class, 'index']);
     Route::get('/menu/{restaurant:slug}', [MenuController::class, 'index']);
@@ -35,6 +36,11 @@ Route::middleware(['resolve.restaurant', 'throttle:60,1'])->group(function () {
 
     // Публичен списък с алергени за конкретния ресторант (четене)
     Route::get('allergens', [AllergenController::class, 'index']);
+
+
+    // Телеметрия – публични endpoint-и (без auth, но с restaurant от домейна/slug-а)
+    Route::post('/telemetry', [TelemetryController::class, 'store']);
+    Route::post('/telemetry/batch', [TelemetryController::class, 'batch']);
 
 });
 
@@ -77,6 +83,8 @@ Route::middleware(['auth:sanctum', 'resolve.restaurant', 'restaurant.admin'])->g
     Route::delete ('allergens/{allergen}',       [AllergenController::class, 'destroy']);
     Route::post   ('/allergens/reorder',         [AllergenController::class, 'reorder']);
 
+
+    Route::get('telemetry/overview', [TelemetryController::class, 'overview']);
 });
 
 /*
