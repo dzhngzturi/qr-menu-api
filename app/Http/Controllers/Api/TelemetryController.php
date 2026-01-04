@@ -12,50 +12,56 @@ class TelemetryController extends Controller
 {
     /**
      * Overview за dashboard-а за конкретен ресторант:
-     * GET /api/admin/restaurants/{restaurant}/telemetry/overview?days=7
+     * GET /api/admin/telemetry/overview?days=7
+     * (restaurant се resolve-ва от middleware resolve.restaurant)
      */
     public function overview(Request $request)
     {
-        $rid = $request->attributes->get('restaurant_id');
+        $rid = (int) $request->attributes->get('restaurant_id');
 
         if (!$rid) {
-            return response()->json([
-                'message' => 'Restaurant not resolved',
-            ], 400);
+            return response()->json(['message' => 'Restaurant not resolved'], 400);
         }
 
-        // зареждаме ресторанта
         $restaurant = Restaurant::find($rid);
 
         // ако няма такъв ресторант или телеметрията му е изключена → 404
         if (!$restaurant || !($restaurant->telemetry_enabled ?? false)) {
-            return response()->json([
-                'message' => 'Not found',
-            ], 404);
+            return response()->json(['message' => 'Not found'], 404);
         }
 
         // дни: 1–90 (по подразбиране 7)
-        $days = (int) $request->input('days', 7);
-        if ($days < 1 || $days > 90) {
-            $days = 7;
-        }
+        $days = (int) $request->query('days', 7);
+        if ($days < 1 || $days > 90) $days = 7;
 
-        // Диапазон [from; to] по occurred_at
+        /**
+         * Календарен диапазон:
+         * при days=7 => от (днес-6) 00:00:00 до днес 23:59:59
+         * ВАЖНО: филтрираме по occurred_at (реално време на евента), не по created_at
+         */
         $to   = Carbon::now()->endOfDay();
-        $from = (clone $to)->subDays($days - 1)->startOfDay();
+        $from = Carbon::now()->subDays($days - 1)->startOfDay();
 
-        $base = TelemetryEvent::where('restaurant_id', $rid)
+        $base = TelemetryEvent::query()
+            ->where('restaurant_id', $rid)
             ->whereBetween('occurred_at', [$from, $to]);
 
-        // ----- totals -----
+        // ----- totals (COUNT на евенти) -----
+        // (ако искаш unique session counts -> кажи, ще сменим логиката)
+        $totalsByType = (clone $base)
+            ->selectRaw('type, COUNT(*) as cnt')
+            ->groupBy('type')
+            ->pluck('cnt', 'type');
+
         $totals = [
-            'all'       => (clone $base)->count(),
-            'qr_scan'   => (clone $base)->where('type', 'qr_scan')->count(),
-            'menu_open' => (clone $base)->where('type', 'menu_open')->count(),
-            'search'    => (clone $base)->where('type', 'search')->count(),
+            'all'       => (int) $totalsByType->sum(),
+            'qr_scan'   => (int) ($totalsByType['qr_scan'] ?? 0),
+            'menu_open' => (int) ($totalsByType['menu_open'] ?? 0),
+            'search'    => (int) ($totalsByType['search'] ?? 0),
         ];
 
         // ----- групирано по ден -----
+        // В MySQL SUM(type='x') работи (връща 0/1). Ако някой ден смениш DB -> може да го сменим на SUM(CASE WHEN ... THEN 1 ELSE 0 END)
         $rows = (clone $base)
             ->selectRaw("
                 DATE(occurred_at) as d,
@@ -71,7 +77,8 @@ class TelemetryController extends Controller
         $eventsByDay = [];
         $cursor = $from->copy();
 
-        while ($cursor->lte($to)) {
+        // точно days дни (inclusive)
+        for ($i = 0; $i < $days; $i++) {
             $key = $cursor->toDateString();
             $row = $rows->get($key);
 
@@ -85,10 +92,9 @@ class TelemetryController extends Controller
             $cursor->addDay();
         }
 
-        // ----- популярни търсения (по search_term колоната) -----
-        $popular = TelemetryEvent::where('restaurant_id', $rid)
+        // ----- популярни търсения -----
+        $popular = (clone $base)
             ->where('type', 'search')
-            ->whereBetween('occurred_at', [$from, $to])
             ->whereNotNull('search_term')
             ->selectRaw("search_term, COUNT(*) as count")
             ->groupBy('search_term')
@@ -103,8 +109,9 @@ class TelemetryController extends Controller
 
         return response()->json([
             'range' => [
-                'from' => $from->toDateTimeString(),
-                'to'   => $to->toDateTimeString(),
+                // за UI е по-удобно date-only (за да не се бърка с часови зони)
+                'from' => $from->toDateString(),
+                'to'   => $to->toDateString(),
                 'days' => $days,
             ],
             'totals'           => $totals,
@@ -113,28 +120,23 @@ class TelemetryController extends Controller
         ]);
     }
 
-
     /**
      * Запис на едно събитие телеметрия.
      * POST /api/telemetry
      */
     public function store(Request $request)
     {
-        $rid = $request->attributes->get('restaurant_id');
+        $rid = (int) $request->attributes->get('restaurant_id');
 
         if (!$rid) {
-            return response()->json([
-                'message' => 'Restaurant not resolved',
-            ], 400);
+            return response()->json(['message' => 'Restaurant not resolved'], 400);
         }
 
         $restaurant = Restaurant::find($rid);
 
         // ако ресторантът не съществува или телеметрията е изключена → не записваме
-        if (!$restaurant || !$restaurant->telemetry_enabled) {
-            return response()->json([
-                'status' => 'telemetry_disabled',
-            ], 204);
+        if (!$restaurant || !($restaurant->telemetry_enabled ?? false)) {
+            return response()->json(['status' => 'telemetry_disabled'], 204);
         }
 
         $data = $request->validate([
@@ -144,7 +146,6 @@ class TelemetryController extends Controller
             'payload'     => ['nullable', 'array'],
         ]);
 
-        // изкарваме search_term от payload-а
         $payload = $data['payload'] ?? [];
         $searchTerm = null;
 
@@ -162,8 +163,8 @@ class TelemetryController extends Controller
             'session_id'    => $data['session_id'] ?? null,
             'ip'            => $request->ip(),
             'user_agent'    => substr($request->userAgent() ?? '', 0, 1000),
-            'search_term'   => $searchTerm,          //  НОВО
-            'payload'       => $payload ?: null,     // може да е null ако е празен
+            'search_term'   => $searchTerm,
+            'payload'       => !empty($payload) ? $payload : null,
         ]);
 
         return response()->json([
@@ -172,22 +173,18 @@ class TelemetryController extends Controller
         ], 201);
     }
 
-
     /**
      * Batch запис: няколко събития в една заявка (по-ефективно).
      * POST /api/telemetry/batch
      */
     public function batch(Request $request)
     {
-        $rid = $request->attributes->get('restaurant_id');
+        $rid = (int) $request->attributes->get('restaurant_id');
 
         if (!$rid) {
-            return response()->json([
-                'message' => 'Restaurant not resolved',
-            ], 400);
+            return response()->json(['message' => 'Restaurant not resolved'], 400);
         }
 
-        // същата защита – ако телеметрията е изключена → не записваме
         $restaurant = Restaurant::find($rid);
         if (!$restaurant || !($restaurant->telemetry_enabled ?? false)) {
             return response()->json(['status' => 'telemetry_disabled'], 200);
@@ -221,9 +218,9 @@ class TelemetryController extends Controller
                 'occurred_at'   => $item['occurred_at'] ?? $now,
                 'session_id'    => $item['session_id'] ?? null,
                 'ip'            => $request->ip(),
-                'user_agent'    => substr($request->userAgent() ?? '',0, 500),
+                'user_agent'    => substr($request->userAgent() ?? '', 0, 1000),
                 'search_term'   => $searchTerm,
-                'payload'       => $payload ?: null,
+                'payload'       => !empty($payload) ? $payload : null,
                 'created_at'    => $now,
                 'updated_at'    => $now,
             ];
