@@ -133,4 +133,19 @@ class AuthController extends Controller
             'message' => 'Профилът е обновен.',
         ]);
     }
+
+
+    public function checkRestaurant(Request $request)
+    {
+        // Този endpoint ще се вика ЗАДЪЛЖИТЕЛНО с middleware:
+        // auth:sanctum + resolve.restaurant + restaurant.admin
+        // Ако middleware-ите пуснат заявката -> значи има достъп
+        $r = $request->attributes->get('restaurant');
+
+        return response()->json([
+            'ok' => true,
+            'restaurant' => $this->restaurantPayload($r),
+        ]);
+    }
+
 }

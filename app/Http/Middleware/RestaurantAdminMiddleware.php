@@ -10,35 +10,40 @@ class RestaurantAdminMiddleware
 {
     public function handle(Request $request, Closure $next)
     {
-        $user = $request->user(); // Sanctum user
+        $user = $request->user();
+
         if (!$user) {
             return response()->json(['message' => 'Unauthenticated.'], 401);
         }
 
-        // 1) Опитай да вземеш ресторанта, който ResolveRestaurant може да е сетнал
-        //    в request атрибутите (ако твоят middleware го прави).
+        // resolve.restaurant ТРЯБВА да е пуснат преди този middleware
         $restaurant = $request->attributes->get('restaurant');
 
-        // 2) Ако го нямаме като атрибут, вземи slug-а от query и зареди модела
-        if (!$restaurant) {
-            $slug = $request->query('restaurant');
-            if (!$slug) {
+        if (!$restaurant instanceof Restaurant) {
+            // fallback (ако някъде си забравил resolve.restaurant)
+            $slug = (string) $request->query('restaurant', '');
+            if ($slug === '') {
                 return response()->json(['message' => 'Restaurant context is required.'], 422);
             }
+
             $restaurant = Restaurant::where('slug', $slug)->first();
             if (!$restaurant) {
                 return response()->json(['message' => 'Restaurant not found.'], 404);
             }
+
+            // за всеки случай сетни атрибутите, за да са консистентни
+            $request->attributes->set('restaurant', $restaurant);
+            $request->attributes->set('restaurant_id', $restaurant->id);
         }
 
-        // 3) Супер админ винаги има достъп
-        if ($user->is_admin) {
+        // супер-админ
+        if ((bool) $user->is_admin) {
             return $next($request);
         }
 
-        // 4) Проверка за owner/manager в pivot таблицата restaurant_user
+        // roles в pivot: owner / manager
         $hasAccess = $user->restaurants()
-            ->where('restaurants.id', $restaurant->id)
+            ->whereKey($restaurant->id)
             ->wherePivotIn('role', ['owner', 'manager'])
             ->exists();
 

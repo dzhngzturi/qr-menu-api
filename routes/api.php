@@ -6,9 +6,9 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\MenuController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\DishController;
-use App\Http\Controllers\Api\AllergenController; 
+use App\Http\Controllers\Api\AllergenController;
 use App\Http\Middleware\BlockLockedLogin;
-use App\Http\Controllers\Api\TelemetryController;   
+use App\Http\Controllers\Api\TelemetryController;
 
 // Платформа (супер-админ)
 use App\Http\Controllers\Api\Platform\RestaurantController as PlatformRestaurantController;
@@ -16,32 +16,29 @@ use App\Http\Controllers\Api\Platform\RestaurantUserController as PlatformRestau
 
 /*
 |--------------------------------------------------------------------------
-| Public (no auth) — изискват ?restaurant=slug
+| Public (no auth) — restaurant context via resolve.restaurant
 |--------------------------------------------------------------------------
 */
 Route::middleware(['resolve.restaurant', 'throttle:60,1', 'public.cache'])->group(function () {
-    // Комбинирано меню (категории + ястия)
+    // Menu endpoints (public)
     Route::get('menu', [MenuController::class, 'index']);
-    Route::get('/menu/{restaurant:slug}', [MenuController::class, 'index']);
-    Route::get('/menu/{restaurant:slug}/categories', [MenuController::class, 'categories']);
-    Route::get('/menu/{restaurant:slug}/dishes', [MenuController::class, 'dishes']);
-    Route::get('/menu/{restaurant:slug}/allergens', [AllergenController::class, 'index']);
+    Route::get('menu/{restaurant:slug}', [MenuController::class, 'index']);
+    Route::get('menu/{restaurant:slug}/categories', [MenuController::class, 'categories']);
+    Route::get('menu/{restaurant:slug}/dishes', [MenuController::class, 'dishes']);
+    Route::get('menu/{restaurant:slug}/allergens', [AllergenController::class, 'index']);
 
-    // Отделни публични четения
-    Route::get('categories',            [CategoryController::class, 'index']);
+    // Public reads (ако ги искаш публични)
+    Route::get('categories', [CategoryController::class, 'index']);
     Route::get('categories/{category}', [CategoryController::class, 'show']);
 
-    Route::get('dishes',                [DishController::class, 'index']);
-    Route::get('dishes/{dish}',         [DishController::class, 'show']);
+    Route::get('dishes', [DishController::class, 'index']);
+    Route::get('dishes/{dish}', [DishController::class, 'show']);
 
-    // Публичен списък с алергени за конкретния ресторант (четене)
     Route::get('allergens', [AllergenController::class, 'index']);
 
-
-    // Телеметрия – публични endpoint-и (без auth, но с restaurant от домейна/slug-а)
-    Route::post('/telemetry', [TelemetryController::class, 'store']);
-    Route::post('/telemetry/batch', [TelemetryController::class, 'batch']);
-
+    // Telemetry (public)
+    Route::post('telemetry', [TelemetryController::class, 'store']);
+    Route::post('telemetry/batch', [TelemetryController::class, 'batch']);
 });
 
 /*
@@ -49,47 +46,57 @@ Route::middleware(['resolve.restaurant', 'throttle:60,1', 'public.cache'])->grou
 | Auth
 |--------------------------------------------------------------------------
 */
-
-Route::post('/auth/login', [AuthController::class, 'login'])->middleware(BlockLockedLogin::class);
+Route::post('auth/login', [AuthController::class, 'login'])->middleware(BlockLockedLogin::class);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('auth/logout', [AuthController::class, 'logout']);
-    Route::get ('auth/me',     [AuthController::class, 'me']);      // четене на профил
-    Route::patch('auth/me',    [AuthController::class, 'update']);  // обновяване на профил
+    Route::get('auth/me', [AuthController::class, 'me']);
+    Route::patch('auth/me', [AuthController::class, 'update']);
 });
 
 /*
 |--------------------------------------------------------------------------
-| Admin CRUD за конкретен ресторант
-| (нужни са Bearer token + ?restaurant=slug + право restaurant.admin)
+| Admin (restaurant-scoped + protected)
 |--------------------------------------------------------------------------
 */
-Route::middleware(['auth:sanctum', 'resolve.restaurant', 'restaurant.admin'])->group(function () {
-    // Категории
-    Route::post   ('categories',                 [CategoryController::class, 'store']);
-    Route::patch  ('categories/{category}',      [CategoryController::class, 'update']);
-    Route::delete ('categories/{category}',      [CategoryController::class, 'destroy']);
-    Route::post   ('categories/reorder',         [CategoryController::class, 'reorder']);
-
-    // Ястия
-    Route::post   ('dishes',                     [DishController::class, 'store']);
-    Route::patch  ('dishes/{dish}',              [DishController::class, 'update']);
-    Route::delete ('dishes/{dish}',              [DishController::class, 'destroy']);
-    Route::post   ('/dishes/reorder',            [DishController::class, 'reorder']);
-
-    // Алергени (CRUD)
-    Route::post   ('allergens',                  [AllergenController::class, 'store']);
-    Route::patch  ('allergens/{allergen}',       [AllergenController::class, 'update']);
-    Route::delete ('allergens/{allergen}',       [AllergenController::class, 'destroy']);
-    Route::post   ('/allergens/reorder',         [AllergenController::class, 'reorder']);
+Route::prefix('admin')
+    ->middleware(['auth:sanctum', 'resolve.restaurant', 'restaurant.admin'])
+    ->group(function () {
+        Route::get('auth/check-restaurant', [AuthController::class, 'checkRestaurant']);
 
 
-    Route::get('telemetry/overview', [TelemetryController::class, 'overview']);
-});
+        // ✅ Admin GET (за да не ползваш public endpoints в админ панела)
+        Route::get('categories', [CategoryController::class, 'index']);
+        Route::get('dishes', [DishController::class, 'index']);
+        Route::get('allergens', [AllergenController::class, 'index']);
+
+        // Categories CRUD
+        Route::post('categories', [CategoryController::class, 'store']);
+        Route::patch('categories/{category}', [CategoryController::class, 'update']);
+        Route::delete('categories/{category}', [CategoryController::class, 'destroy']);
+        Route::post('categories/reorder', [CategoryController::class, 'reorder']);
+
+        // Dishes CRUD
+        Route::post('dishes', [DishController::class, 'store']);
+        Route::patch('dishes/{dish}', [DishController::class, 'update']);
+        Route::delete('dishes/{dish}', [DishController::class, 'destroy']);
+        Route::post('dishes/reorder', [DishController::class, 'reorder']);
+
+        // Allergens CRUD
+        Route::post('allergens', [AllergenController::class, 'store']);
+        Route::patch('allergens/{allergen}', [AllergenController::class, 'update']);
+        Route::delete('allergens/{allergen}', [AllergenController::class, 'destroy']);
+        Route::post('allergens/reorder', [AllergenController::class, 'reorder']);
+
+        Route::get('telemetry/overview', [TelemetryController::class, 'overview']);
+
+
+
+    });
 
 /*
 |--------------------------------------------------------------------------
-| Платформа (супер-админ)
+| Platform (superadmin)
 |--------------------------------------------------------------------------
 */
 Route::prefix('platform')
@@ -97,10 +104,12 @@ Route::prefix('platform')
     ->group(function () {
         Route::apiResource('restaurants', PlatformRestaurantController::class);
 
-        Route::get   ('restaurants/{restaurant:id}/users',        [PlatformRestaurantUserController::class, 'index'])
+        Route::get('restaurants/{restaurant:id}/users', [PlatformRestaurantUserController::class, 'index'])
             ->whereNumber('restaurant');
-        Route::post  ('restaurants/{restaurant:id}/users',        [PlatformRestaurantUserController::class, 'attach'])
+
+        Route::post('restaurants/{restaurant:id}/users', [PlatformRestaurantUserController::class, 'attach'])
             ->whereNumber('restaurant');
+
         Route::delete('restaurants/{restaurant:id}/users/{user}', [PlatformRestaurantUserController::class, 'detach'])
             ->whereNumber('restaurant');
     });

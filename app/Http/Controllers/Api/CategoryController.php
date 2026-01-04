@@ -14,7 +14,7 @@ class CategoryController extends Controller
 {
     public function index(Request $request)
     {
-        $rid = $request->attributes->get('restaurant_id');
+        $rid = (int) $request->attributes->get('restaurant_id');
 
         $categories = Category::where('restaurant_id', $rid)
             ->orderBy('position')
@@ -26,14 +26,14 @@ class CategoryController extends Controller
 
     public function store(Request $request)
     {
-        $rid = $request->attributes->get('restaurant_id');
+        $rid = (int) $request->attributes->get('restaurant_id');
 
         $data = $request->validate([
             'name'      => ['required', 'string', 'max:100',
-                Rule::unique('categories', 'name')->where(fn($q) => $q->where('restaurant_id', $rid))
+                Rule::unique('categories', 'name')->where(fn ($q) => $q->where('restaurant_id', $rid))
             ],
             'slug'      => ['nullable', 'string', 'max:120',
-                Rule::unique('categories', 'slug')->where(fn($q) => $q->where('restaurant_id', $rid))
+                Rule::unique('categories', 'slug')->where(fn ($q) => $q->where('restaurant_id', $rid))
             ],
             'position'  => ['nullable', 'integer', 'min:0'],
             'is_active' => ['nullable', 'boolean'],
@@ -52,7 +52,7 @@ class CategoryController extends Controller
 
         // качване на снимка
         if ($request->hasFile('image')) {
-            $ext = $request->file('image')->extension();
+            $ext  = $request->file('image')->extension();
             $dest = "uploads/restaurants/{$rid}/categories/{$slug}.{$ext}";
             Storage::disk('public')->put($dest, file_get_contents($request->file('image')->getRealPath()));
             $payload['image_path'] = $dest;
@@ -65,18 +65,23 @@ class CategoryController extends Controller
 
     public function update(Request $request, Category $category)
     {
-        $rid = $request->attributes->get('restaurant_id');
+        $rid = (int) $request->attributes->get('restaurant_id');
+
+        // ✅ Tenant isolation: не позволявай update на чужд ресторант
+        if ((int) $category->restaurant_id !== $rid) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
 
         $data = $request->validate([
             'name'      => ['required', 'string', 'max:100',
                 Rule::unique('categories', 'name')
                     ->ignore($category->id)
-                    ->where(fn($q) => $q->where('restaurant_id', $rid))
+                    ->where(fn ($q) => $q->where('restaurant_id', $rid))
             ],
             'slug'      => ['nullable', 'string', 'max:120',
                 Rule::unique('categories', 'slug')
                     ->ignore($category->id)
-                    ->where(fn($q) => $q->where('restaurant_id', $rid))
+                    ->where(fn ($q) => $q->where('restaurant_id', $rid))
             ],
             'position'  => ['nullable', 'integer', 'min:0'],
             'is_active' => ['nullable', 'boolean'],
@@ -84,18 +89,20 @@ class CategoryController extends Controller
         ]);
 
         $slug = $data['slug'] ?? $category->slug ?? Str::slug($data['name'], '-');
+
         $payload = [
             'name'      => $data['name'],
             'slug'      => $slug,
             'position'  => $data['position'] ?? $category->position,
-            'is_active' => (bool)($data['is_active'] ?? true),
+            'is_active' => (bool) ($data['is_active'] ?? true),
         ];
 
         if ($request->hasFile('image')) {
             if ($category->image_path) {
                 Storage::disk('public')->delete($category->image_path);
             }
-            $ext = $request->file('image')->extension();
+
+            $ext  = $request->file('image')->extension();
             $dest = "uploads/restaurants/{$rid}/categories/{$slug}.{$ext}";
             Storage::disk('public')->put($dest, file_get_contents($request->file('image')->getRealPath()));
             $payload['image_path'] = $dest;
@@ -106,28 +113,48 @@ class CategoryController extends Controller
         return new CategoryResource($category->loadCount('dishes'));
     }
 
-    public function destroy(Category $category)
+    public function destroy(Request $request, Category $category)
     {
+        $rid = (int) $request->attributes->get('restaurant_id');
+
+        // ✅ Tenant isolation: не позволявай delete на чужд ресторант
+        if ((int) $category->restaurant_id !== $rid) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
         if ($category->image_path) {
             Storage::disk('public')->delete($category->image_path);
         }
+
         $category->delete();
+
         return response()->json(['message' => 'Deleted']);
     }
 
     public function reorder(Request $request)
     {
+        $rid = (int) $request->attributes->get('restaurant_id');
         $ids = $request->input('ids'); // очаква масив: [3,1,2,...]
 
-        if (!is_array($ids)) {
+        if (!is_array($ids) || empty($ids)) {
             return response()->json(['error' => 'Invalid data'], 422);
         }
 
+        // ✅ Увери се, че всички подадени ids са от текущия ресторант
+        $count = Category::where('restaurant_id', $rid)
+            ->whereIn('id', $ids)
+            ->count();
+
+        if ($count !== count($ids)) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
         foreach ($ids as $i => $id) {
-            Category::where('id', $id)->update(['position' => $i + 1]);
+            Category::where('restaurant_id', $rid)
+                ->where('id', $id)
+                ->update(['position' => $i + 1]);
         }
 
         return response()->json(['message' => 'Order updated']);
     }
-
 }

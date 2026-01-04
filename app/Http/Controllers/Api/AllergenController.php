@@ -12,7 +12,6 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
-
 class AllergenController extends Controller
 {
     /**
@@ -31,7 +30,9 @@ class AllergenController extends Controller
             $q = Allergen::query()
                 ->where('restaurant_id', $rid)
                 ->when($request->boolean('only_active'), fn ($qq) => $qq->where('is_active', true))
-                ->orderBy('id')->orderBy('code');
+                ->orderBy('position')
+                ->orderBy('id')
+                ->orderBy('code');
 
             $per = (int) $request->input('per_page', 20);
 
@@ -96,41 +97,55 @@ class AllergenController extends Controller
         return response()->noContent();
     }
 
-    /** 404, ако записът не е на текущия ресторант */
+    /**
+     * Забранява достъп ако записът не е на текущия ресторант
+     * (403 е по-ясно за админ панел; ако искаш да "скриеш" ресурси, смени на 404)
+     */
     private function guardRestaurant(Request $request, int $ownerRid): void
     {
         $rid = (int) $request->attributes->get('restaurant_id');
-        abort_unless($rid === $ownerRid, 404);
+        abort_unless($rid === $ownerRid, 403, 'Forbidden');
     }
 
+    /**
+     * POST /api/allergens/reorder?restaurant=...  (admin)
+     * Body: { "ids": [5,2,9,...] }
+     */
     public function reorder(Request $request)
     {
-        $rid = $request->attributes->get('restaurant_id');
+        $rid = (int) $request->attributes->get('restaurant_id');
 
         $data = $request->validate([
-            'ids' => ['required','array','min:1'],
-            'ids.*' => ['integer','distinct']
+            'ids'   => ['required', 'array', 'min:1'],
+            'ids.*' => ['integer', 'distinct'],
         ]);
 
-        $validIds = \App\Models\Allergen::where('restaurant_id', $rid)
+        // ✅ Увери се, че всички ids са от този ресторант
+        $validIds = Allergen::where('restaurant_id', $rid)
             ->whereIn('id', $data['ids'])
-            ->pluck('id')->all();
+            ->pluck('id')
+            ->all();
 
-        if (!count($validIds)) return response()->noContent();
+        if (count($validIds) !== count($data['ids'])) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
 
         $order = [];
         $pos = 1;
         foreach ($data['ids'] as $id) {
-            if (in_array($id, $validIds, true)) $order[$id] = $pos++;
+            $order[$id] = $pos++;
         }
 
-        DB::transaction(function () use ($order) {
+        DB::transaction(function () use ($rid, $order) {
             foreach ($order as $id => $position) {
-                \App\Models\Allergen::where('id', $id)->update(['position' => $position]);
+                Allergen::where('restaurant_id', $rid)
+                    ->where('id', $id)
+                    ->update(['position' => $position]);
             }
         });
 
-        Cache::flush(); // или Cache::tags(["menu:$rid"])->flush();
+        // ✅ не flush-ваме целия cache за всички ресторанти
+        Cache::increment("rest:{$rid}:ver");
 
         return response()->noContent();
     }
